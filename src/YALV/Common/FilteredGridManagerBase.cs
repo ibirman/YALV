@@ -3,10 +3,12 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Timers;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
-using YALV.Core;
 using YALV.Core.Domain;
 
 namespace YALV.Common
@@ -16,38 +18,39 @@ namespace YALV.Common
     {
         public FilteredGridManagerBase(DataGrid dg, Panel txtSearchPanel, KeyEventHandler keyUpEvent)
         {
-            _dg = dg;
-            _txtSearchPanel = txtSearchPanel;
-            _keyUpEvent = keyUpEvent;
-            _filterPropertyList = new List<string>();
-            _txtCache = new Hashtable();
+            Dg = dg;
+            TxtSearchPanel = txtSearchPanel;
+            KeyUpEvent = keyUpEvent;
+            FilterPropertyList = new List<string>();
+            TxtCache = new Hashtable();
             IsFilteringEnabled = true;
         }
 
         protected override void OnDispose()
         {
             ClearCache();
-            if (_filterPropertyList != null)
-                _filterPropertyList.Clear();
-            if (_dg != null)
-                _dg.Columns.Clear();
-            if (_cvs != null)
+            FilterPropertyList?.Clear();
+            Dg?.Columns.Clear();
+            if (Cvs != null)
             {
-                if (_cvs.View != null)
-                    _cvs.View.Filter = null;
-                BindingOperations.ClearAllBindings(_cvs);
+                if (Cvs.View != null)
+                    Cvs.View.Filter = null;
+                BindingOperations.ClearAllBindings(Cvs);
             }
             base.OnDispose();
         }
 
         #region Private Properties
 
-        protected IList<string> _filterPropertyList;
-        protected DataGrid _dg;
-        protected Panel _txtSearchPanel;
-        protected KeyEventHandler _keyUpEvent;
-        protected CollectionViewSource _cvs;
-        protected Hashtable _txtCache;
+        protected IList<string> FilterPropertyList;
+        protected DataGrid Dg;
+        protected Panel TxtSearchPanel;
+        protected KeyEventHandler KeyUpEvent;
+        protected CollectionViewSource Cvs;
+        protected Hashtable TxtCache;
+
+        private bool _goodregex;
+        private Timer _timer;
 
         #endregion
 
@@ -55,42 +58,53 @@ namespace YALV.Common
 
         public virtual void AssignSource(Binding sourceBind)
         {
-            if (_cvs == null)
-                _cvs = new CollectionViewSource();
+            if (Cvs == null)
+                Cvs = new CollectionViewSource();
             else
-                BindingOperations.ClearBinding(_cvs, CollectionViewSource.SourceProperty);
+                BindingOperations.ClearBinding(Cvs, CollectionViewSource.SourceProperty);
 
-            BindingOperations.SetBinding(_cvs, CollectionViewSource.SourceProperty, sourceBind);
-            BindingOperations.ClearBinding(_dg, DataGrid.ItemsSourceProperty);
-            Binding bind = new Binding() { Source = _cvs, Mode = BindingMode.OneWay };
-            _dg.SetBinding(DataGrid.ItemsSourceProperty, bind);
+            BindingOperations.SetBinding(Cvs, CollectionViewSource.SourceProperty, sourceBind);
+            BindingOperations.ClearBinding(Dg, ItemsControl.ItemsSourceProperty);
+            Binding bind = new Binding() { Source = Cvs, Mode = BindingMode.OneWay };
+            Dg.SetBinding(ItemsControl.ItemsSourceProperty, bind);
+        }
+
+        private void _timer_Elapsed(object sender, ElapsedEventArgs e)
+        {
+            _goodregex = false;
         }
 
         public ICollectionView GetCollectionView()
         {
-            if (_cvs != null)
+            // Don't allow search to run more than 3 seconds
+            _timer = new Timer(3000);
+            _timer.Elapsed += _timer_Elapsed;
+            _timer.Enabled = true;
+
+            if (Cvs != null)
             {
                 //Assign filter method
-                if (_cvs.View != null && _cvs.View.Filter == null)
+                if (Cvs.View != null && Cvs.View.Filter == null)
                 {
                     IsFilteringEnabled = false;
-                    _cvs.View.Filter = itemCheckFilter;
+                    Cvs.View.Filter = ItemCheckFilter;
                     IsFilteringEnabled = true;
                 }
-                return _cvs.View;
+                return Cvs.View;
             }
             return null;
         }
 
         public void ResetSearchTextBox()
         {
-            if (_filterPropertyList != null && _txtSearchPanel != null)
+            if (FilterPropertyList != null && TxtSearchPanel != null)
             {
                 //Clear all textbox text
-                foreach (string prop in _filterPropertyList)
+                foreach (string prop in FilterPropertyList)
                 {
-                    TextBox txt = _txtSearchPanel.FindName(getTextBoxName(prop)) as TextBox;
-                    if (txt != null & !string.IsNullOrEmpty(txt.Text))
+                    var txt = TxtSearchPanel.FindName(GetTextBoxName(prop)) as TextBox;
+
+                    if (!string.IsNullOrEmpty(txt?.Text))
                         txt.Text = string.Empty;
                 }
             }
@@ -98,8 +112,7 @@ namespace YALV.Common
 
         public void ClearCache()
         {
-            if (_txtCache != null)
-                _txtCache.Clear();
+            TxtCache?.Clear();
         }
 
         public Func<object, bool> OnBeforeCheckFilter;
@@ -112,17 +125,17 @@ namespace YALV.Common
 
         #region Private Methods
 
-        protected string getTextBoxName(string prop)
+        protected string GetTextBoxName(string prop)
         {
-            return string.Format("txtFilter{0}", prop).Replace(".", "");
+            return $"txtFilter{prop}".Replace(".", "");
         }
 
-        protected bool itemCheckFilter(object item)
+        protected bool ItemCheckFilter(object item)
         {
             bool res = true;
 
             if (!IsFilteringEnabled)
-                return res;
+                return true;
 
             try
             {
@@ -130,20 +143,20 @@ namespace YALV.Common
                     res = OnBeforeCheckFilter(item);
 
                 if (!res)
-                    return res;
+                    return false;
 
-                if (_filterPropertyList != null && _txtSearchPanel != null)
+                if (FilterPropertyList != null && TxtSearchPanel != null)
                 {
                     //Check each filter property
-                    foreach (string prop in _filterPropertyList)
+                    foreach (string prop in FilterPropertyList)
                     {
-                        TextBox txt = null;
-                        if (_txtCache.ContainsKey(prop))
-                            txt = _txtCache[prop] as TextBox;
+                        TextBox txt;
+                        if (TxtCache.ContainsKey(prop))
+                            txt = TxtCache[prop] as TextBox;
                         else
                         {
-                            txt = _txtSearchPanel.FindName(getTextBoxName(prop)) as TextBox;
-                            _txtCache[prop] = txt;
+                            txt = TxtSearchPanel.FindName(GetTextBoxName(prop)) as TextBox;
+                            TxtCache[prop] = txt;
                         }
 
                         res = false;
@@ -158,17 +171,85 @@ namespace YALV.Common
                                 try
                                 {
                                     //Get property value
-                                    object val = getItemValue(item, prop);
+                                    object val = GetItemValue(item, prop);
+
                                     if (val != null)
                                     {
-                                        string valToCompare = string.Empty;
+                                        string valToCompare;
                                         if (val is DateTime)
                                             valToCompare = ((DateTime)val).ToString(GlobalHelper.DisplayDateTimeFormat, System.Globalization.CultureInfo.GetCultureInfo(Properties.Resources.CultureName));
                                         else
-                                            valToCompare = val.ToString();
+                                            valToCompare = val.ToString().ToLower();
 
-                                        if (valToCompare.ToString().IndexOf(txt.Text, StringComparison.OrdinalIgnoreCase) >= 0)
-                                            res = true;
+                                        var pattern = txt.Text.ToLower();
+
+                                        var terms = pattern.Split(' ');
+
+                                        // check for negated/added values
+                                        if (terms.Any(term => term.StartsWith("-") || term.StartsWith("+")))
+                                        {
+                                            res = false;
+
+                                            foreach (var term in terms)
+                                            {
+                                                // value must not contain the term
+                                                if (term.StartsWith("-"))
+                                                    if (valToCompare.Contains(term.Substring(1)))
+                                                    {
+                                                        res = false;
+                                                        break;
+                                                    }
+                                                    else
+                                                    {
+                                                        res = true;
+                                                    }
+                                                // value must contain the term
+                                                else if (term.StartsWith("+"))
+                                                    if (valToCompare.Contains(term.Substring(1)))
+                                                    {
+                                                        res = true;
+                                                    }
+                                                    else
+                                                    {
+                                                        res = false;
+                                                        break;
+                                                    }
+                                                else
+                                                {
+                                                    // value may contain the term
+                                                    if (valToCompare.Contains(term))
+                                                    {
+                                                        res = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // check for regex
+                                        else if (pattern.Length > 2 && pattern.StartsWith("/") && pattern.EndsWith("/") && _goodregex)
+                                        {
+                                            try
+                                            {
+                                                if (Regex.IsMatch(valToCompare, pattern.Substring(1, pattern.Length - 2)))
+                                                {
+                                                    res = true;
+                                                }
+                                            }
+                                            catch
+                                            {
+                                                // if regex is an error, stop evaluating regexes
+                                                res = true;
+                                                _goodregex = false;
+                                            }
+                                        }
+                                        // normal search
+                                        else
+                                        {
+                                            if (valToCompare.ToLower().IndexOf(pattern, StringComparison.Ordinal) >= 0)
+                                            {
+                                                res = true;
+                                            }
+                                        }
+
                                     }
                                 }
                                 catch (Exception ex)
@@ -179,10 +260,9 @@ namespace YALV.Common
                             }
                         }
                         if (!res)
-                            return res;
+                            return false;
                     }
                 }
-                res = true;
             }
             finally
             {
@@ -190,12 +270,13 @@ namespace YALV.Common
                     res = OnAfterCheckFilter(item, res);
 
             }
+
             return res;
         }
 
-        protected object getItemValue(object item, string prop)
+        protected object GetItemValue(object item, string prop)
         {
-            object val = null;
+            object val;
             try
             {
                 val = item.GetType().GetProperty(prop).GetValue(item, null);
